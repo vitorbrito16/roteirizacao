@@ -1,0 +1,1 @@
+estou tentando criar um codigo que distribua as tarefas pelos recursos seguindo as regras: uma nota so pode ser atribuida para um recurso; o custo total de notas para um recurso nao pode ultrapassar sua disponibilidade. Alem disso, quero aplicar um objetivo de equilibrar as tarefas entre os recursos para se chegar numa distribuicao mais justa.
