@@ -62,7 +62,7 @@ def aplicar_restricoes(modelo, tarefas, recursos):
                     f"tarefa{tarefa.nota}_proj{recurso.matricula}"
                 )
 
-    # Restrição: cada tarefa atribuída a apenas um projetista elegível
+    # Restrição: cada tarefa atribuída a apenas um recurso elegível
     for tarefa in tarefas:
         elegiveis = [
             tarefa_recurso[(tarefa.nota, recurso.matricula)]
@@ -83,49 +83,31 @@ def aplicar_restricoes(modelo, tarefas, recursos):
     return modelo, tarefa_recurso
 
 
-# def aplicar_objetivo(modelo, tarefas, recursos):
-#     cargas = []
-#     for recurso in recursos:
-#         carga = modelo.NewIntVar(
-#             0, recurso.disponibilidade, f"carga_recurso{recurso.matricula}"
-#         )
-#         modelo.Add(carga == sum(tarefa.custo for tarefa in tarefas))
-#         cargas.append(carga)
-
-#     max_carga = modelo.NewIntVar(
-#         0, sum(tarefa.custo for tarefa in tarefas), "max_carga"
-#     )
-#     min_carga = modelo.NewIntVar(
-#         0, sum(tarefa.custo for tarefa in tarefas), "min_carga"
-#     )
-#     modelo.AddMaxEquality(max_carga, cargas)
-#     modelo.AddMinEquality(min_carga, cargas)
-#     modelo.Minimize(max_carga - min_carga)
-
-#     return modelo, cargas
-
-
 def aplicar_objetivo_balanceamento(modelo, tarefas, recursos, tarefa_recurso):
-    # Variáveis auxiliares para carga total por recurso
     carga_por_recurso = {}
+    variaveis_carga = []
+
     for recurso in recursos:
-        carga = sum(
-            tarefa.custo * tarefa_recurso[(tarefa.nota, recurso.matricula)]
-            for tarefa in tarefas
-            if (tarefa.nota, recurso.matricula) in tarefa_recurso
+        var_carga = modelo.NewIntVar(
+            0, sum(tarefa.custo for tarefa in tarefas), f"carga_{recurso.matricula}"
         )
-        carga_por_recurso[recurso.matricula] = carga
+        modelo.Add(
+            var_carga
+            == sum(
+                tarefa.custo * tarefa_recurso[(tarefa.nota, recurso.matricula)]
+                for tarefa in tarefas
+                if (tarefa.nota, recurso.matricula) in tarefa_recurso
+            )
+        )
+        carga_por_recurso[recurso.matricula] = var_carga
+        variaveis_carga.append(var_carga)
 
-    # Variável para carga máxima entre os recursos
-    carga_max = modelo.NewIntVar(
-        0, sum(tarefa.custo for tarefa in tarefas), "carga_max"
-    )
-    carga_min = modelo.NewIntVar(
-        0, sum(tarefa.custo for tarefa in tarefas), "carga_min"
-    )
+    carga_max = modelo.NewIntVar(0, sum(t.custo for t in tarefas), "carga_max")
+    carga_min = modelo.NewIntVar(0, sum(t.custo for t in tarefas), "carga_min")
 
-    modelo.AddMaxEquality(carga_max, carga_por_recurso)
-    modelo.AddMinEquality(carga_min, carga_por_recurso)
+    modelo.AddMaxEquality(carga_max, variaveis_carga)
+    modelo.AddMinEquality(carga_min, variaveis_carga)
+
     modelo.Minimize(carga_max - carga_min)
 
     return modelo, carga_por_recurso
@@ -140,28 +122,29 @@ def solucionar_modelo(modelo):
 
 def exportar_resultado(status, solver, tarefas, recursos, tarefa_recurso):
     # Exportar resultados para CSV
-    if status == cp_model.OPTIMAL or status == cp_model.FEASIBLE:
-        dados = []
-        for tarefa in tarefas:
-            for recurso in recursos:
-                chave = (tarefa.nota, recurso.matricula)
-                if chave in tarefa_recurso and solver.Value(tarefa_recurso[chave]) == 1:
-                    dados.append(
-                        {
-                            "nota": tarefa.nota,
-                            "matricula": recurso.matricula,
-                            "nome": recurso.nome,
-                            "custo": tarefa.custo,
-                            "prioridade": tarefa.prioridade,
-                        }
-                    )
+    # if status == cp_model.OPTIMAL or status == cp_model.FEASIBLE:
+    print(status)
+    dados = []
+    for tarefa in tarefas:
+        for recurso in recursos:
+            chave = (tarefa.nota, recurso.matricula)
+            if chave in tarefa_recurso and solver.Value(tarefa_recurso[chave]) == 1:
+                dados.append(
+                    {
+                        "nota": tarefa.nota,
+                        "matricula": recurso.matricula,
+                        "nome": recurso.nome,
+                        "custo": tarefa.custo,
+                        "prioridade": tarefa.prioridade,
+                    }
+                )
 
-            df = pd.DataFrame(dados)
-            df.to_csv("distribuicao_tarefas.csv", index=False, encoding="utf-8")
+    df = pd.DataFrame(dados)
+    df.to_csv("distribuicao_tarefas.csv", index=False, encoding="utf-8")
 
-        print("Distribuição exportada para 'distribuicao_tarefas.csv'.")
-    else:
-        print(f"Não foi possível encontrar uma solução viável: {status}")
+    print("Distribuição exportada para 'distribuicao_tarefas.csv'.")
+    # else:
+    #     print(f"Não foi possível encontrar uma solução viável: {status}")
 
 
 def main():
@@ -179,10 +162,10 @@ def main():
     modelo_restrito, tarefa_recurso = aplicar_restricoes(
         modelo, tarefas_priorizadas, recursos
     )
-    modelo_final, carga_por_recurso = aplicar_objetivo_balanceamento(
-        modelo_restrito, tarefas_priorizadas, recursos, tarefa_recurso
-    )
-    status, solver = solucionar_modelo(modelo_final)
+    # modelo_final, carga_por_recurso = aplicar_objetivo_balanceamento(
+    #     modelo_restrito, tarefas_priorizadas, recursos, tarefa_recurso
+    # )
+    status, solver = solucionar_modelo(modelo_restrito)
 
     exportar_resultado(status, solver, tarefas_priorizadas, recursos, tarefa_recurso)
 
