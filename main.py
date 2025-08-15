@@ -1,67 +1,191 @@
+import csv
+import os
+from typing import List
+
+import pandas as pd
+from dotenv import load_dotenv
 from ortools.sat.python import cp_model
 
-# Dados de exemplo
-notas = [
-    {"id": 1, "descricao": "Nota A", "tempo": 2, "prioridade": 3},
-    {"id": 2, "descricao": "Nota B", "tempo": 4, "prioridade": 2},
-    {"id": 3, "descricao": "Nota C", "tempo": 3, "prioridade": 1},
-    {"id": 4, "descricao": "Nota D", "tempo": 1, "prioridade": 2},
-    {"id": 5, "descricao": "Nota E", "tempo": 2, "prioridade": 1},
-]
+from _types import Recurso, Tarefa
 
-projetistas = [
-    {"id": 0, "nome": "Ana", "carga_diaria": 6},
-    {"id": 1, "nome": "Bruno", "carga_diaria": 6},
-]
+load_dotenv()
 
-# Inicializa o modelo
-model = cp_model.CpModel()
 
-# Variáveis: nota atribuída ao projetista
-nota_vars = {}
-for nota in notas:
-    for proj in projetistas:
-        nota_vars[(nota["id"], proj["id"])] = model.NewBoolVar(f"nota{nota['id']}_proj{proj['id']}")
+def obter_recursos(caminho):
+    recursos: List[Recurso] = []
+    df = pd.read_csv(caminho, encoding="utf-8", sep=";")
+    for _, row in df.iterrows():
+        habilidades = row["habilidades"].split(",")
+        recursos.append(
+            Recurso(
+                row["matricula"],
+                row["nome"],
+                row["nucleo"],
+                int(row["disponibilidade"]),
+                habilidades,
+            )
+        )
+    return recursos, df
 
-# Restrição: cada nota deve ser atribuída a apenas um projetista
-for nota in notas:
-    model.Add(sum(nota_vars[(nota["id"], proj["id"])] for proj in projetistas) == 1)
 
-# Restrição: carga diária por projetista
-for proj in projetistas:
-    model.Add(
-        sum(nota_vars[(nota["id"], proj["id"])] * nota["tempo"] for nota in notas)
-        <= proj["carga_diaria"]
+def obter_tarefas(caminho):
+    tarefas: List[Tarefa] = []
+    df = pd.read_csv(caminho, encoding="utf-8", sep=";")
+    for _, row in df.iterrows():
+        habilidades = row["habilidades"].split(",")
+        tarefas.append(
+            Tarefa(
+                int(row["nota"]),
+                row["grupo"],
+                row["codigo"],
+                int(row["custo"]),
+                int(row["prioridade"]),
+                habilidades,
+            )
+        )
+    return tarefas, df
+
+
+def aplicar_prioridade(tarefas: List[Tarefa]):
+    # Ordenar notas por prioridade (menor número = maior prioridade)
+    tarefas.sort(key=lambda n: n.prioridade)
+    return tarefas
+
+
+def aplicar_restricoes(modelo, tarefas, recursos):
+    # Variáveis de decisão: nota atribuída ao projetista
+    tarefa_recurso = {}
+    for tarefa in tarefas:
+        for recurso in recursos:
+            if all(hab in recurso.habilidades for hab in tarefa.habilidades):
+                tarefa_recurso[(tarefa.nota, recurso.matricula)] = modelo.NewBoolVar(
+                    f"tarefa{tarefa.nota}_proj{recurso.matricula}"
+                )
+
+    # Restrição: cada tarefa atribuída a apenas um projetista elegível
+    for tarefa in tarefas:
+        elegiveis = [
+            tarefa_recurso[(tarefa.nota, recurso.matricula)]
+            for recurso in recursos
+            if (tarefa.nota, recurso.matricula) in tarefa_recurso
+        ]
+        modelo.Add(sum(elegiveis) == 1)
+
+    # Restrição: carga horária por projetista
+    for recurso in recursos:
+        carga_total = sum(
+            tarefa.custo * tarefa_recurso[(tarefa.nota, recurso.matricula)]
+            for tarefa in tarefas
+            if (tarefa.nota, recurso.matricula) in tarefa_recurso
+        )
+        modelo.Add(carga_total <= recurso.disponibilidade)
+
+    return modelo, tarefa_recurso
+
+
+# def aplicar_objetivo(modelo, tarefas, recursos):
+#     cargas = []
+#     for recurso in recursos:
+#         carga = modelo.NewIntVar(
+#             0, recurso.disponibilidade, f"carga_recurso{recurso.matricula}"
+#         )
+#         modelo.Add(carga == sum(tarefa.custo for tarefa in tarefas))
+#         cargas.append(carga)
+
+#     max_carga = modelo.NewIntVar(
+#         0, sum(tarefa.custo for tarefa in tarefas), "max_carga"
+#     )
+#     min_carga = modelo.NewIntVar(
+#         0, sum(tarefa.custo for tarefa in tarefas), "min_carga"
+#     )
+#     modelo.AddMaxEquality(max_carga, cargas)
+#     modelo.AddMinEquality(min_carga, cargas)
+#     modelo.Minimize(max_carga - min_carga)
+
+#     return modelo, cargas
+
+
+def aplicar_objetivo_balanceamento(modelo, tarefas, recursos, tarefa_recurso):
+    # Variáveis auxiliares para carga total por recurso
+    carga_por_recurso = {}
+    for recurso in recursos:
+        carga = sum(
+            tarefa.custo * tarefa_recurso[(tarefa.nota, recurso.matricula)]
+            for tarefa in tarefas
+            if (tarefa.nota, recurso.matricula) in tarefa_recurso
+        )
+        carga_por_recurso[recurso.matricula] = carga
+
+    # Variável para carga máxima entre os recursos
+    carga_max = modelo.NewIntVar(
+        0, sum(tarefa.custo for tarefa in tarefas), "carga_max"
+    )
+    carga_min = modelo.NewIntVar(
+        0, sum(tarefa.custo for tarefa in tarefas), "carga_min"
     )
 
-# Objetivo: balancear carga entre projetistas (minimizar diferença de tempo)
-cargas = []
-for proj in projetistas:
-    carga = model.NewIntVar(0, proj["carga_diaria"], f"carga_proj{proj['id']}")
-    model.Add(carga == sum(nota_vars[(nota["id"], proj["id"])] * nota["tempo"] for nota in notas))
-    cargas.append(carga)
+    modelo.AddMaxEquality(carga_max, carga_por_recurso)
+    modelo.AddMinEquality(carga_min, carga_por_recurso)
+    modelo.Minimize(carga_max - carga_min)
 
-max_carga = model.NewIntVar(0, sum(nota["tempo"] for nota in notas), "max_carga")
-min_carga = model.NewIntVar(0, sum(nota["tempo"] for nota in notas), "min_carga")
-model.AddMaxEquality(max_carga, cargas)
-model.AddMinEquality(min_carga, cargas)
-model.Minimize(max_carga - min_carga)
-
-# Resolve o modelo
-solver = cp_model.CpSolver()
-status = solver.Solve(model)
-
-# Exibe resultados
-if status == cp_model.OPTIMAL or status == cp_model.FEASIBLE:
-    for proj in projetistas:
-        print(f"\nProjetista: {proj['nome']}")
-        total = 0
-        for nota in notas:
-            if solver.Value(nota_vars[(nota["id"], proj["id"])]) == 1:
-                print(f"  - {nota['descricao']} ({nota['tempo']}h)")
-                total += nota["tempo"]
-        print(f"  Total atribuído: {total}h")
-else:
-    print("Nenhuma solução encontrada.")
+    return modelo, carga_por_recurso
 
 
+def solucionar_modelo(modelo):
+    # Solução
+    solver = cp_model.CpSolver()
+    status = solver.Solve(modelo)
+    return status, solver
+
+
+def exportar_resultado(status, solver, tarefas, recursos, tarefa_recurso):
+    # Exportar resultados para CSV
+    if status == cp_model.OPTIMAL or status == cp_model.FEASIBLE:
+        dados = []
+        for tarefa in tarefas:
+            for recurso in recursos:
+                chave = (tarefa.nota, recurso.matricula)
+                if chave in tarefa_recurso and solver.Value(tarefa_recurso[chave]) == 1:
+                    dados.append(
+                        {
+                            "nota": tarefa.nota,
+                            "matricula": recurso.matricula,
+                            "nome": recurso.nome,
+                            "custo": tarefa.custo,
+                            "prioridade": tarefa.prioridade,
+                        }
+                    )
+
+            df = pd.DataFrame(dados)
+            df.to_csv("distribuicao_tarefas.csv", index=False, encoding="utf-8")
+
+        print("Distribuição exportada para 'distribuicao_tarefas.csv'.")
+    else:
+        print(f"Não foi possível encontrar uma solução viável: {status}")
+
+
+def main():
+    CAMINHO_RECURSOS = os.getenv("CAMINHO_RECURSOS")
+    CAMINHO_TAREFAS = os.getenv("CAMINHO_TAREFAS")
+
+    tarefas, df_tarefas = obter_tarefas(CAMINHO_TAREFAS)
+    recursos, df_recursos = obter_recursos(CAMINHO_RECURSOS)
+    # print(df_tarefas.head())
+    # print(df_recursos.head())
+
+    tarefas_priorizadas = aplicar_prioridade(tarefas)
+    modelo = cp_model.CpModel()
+
+    modelo_restrito, tarefa_recurso = aplicar_restricoes(
+        modelo, tarefas_priorizadas, recursos
+    )
+    modelo_final, carga_por_recurso = aplicar_objetivo_balanceamento(
+        modelo_restrito, tarefas_priorizadas, recursos, tarefa_recurso
+    )
+    status, solver = solucionar_modelo(modelo_final)
+
+    exportar_resultado(status, solver, tarefas_priorizadas, recursos, tarefa_recurso)
+
+
+if __name__ == "__main__":
+    main()

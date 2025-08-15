@@ -6,4 +6,12 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "ortools",
+    "pandas>=2.3.1",
+    "prefect>=3.4.13",
+]
+
+[dependency-groups]
+dev = [
+    "isort>=6.0.1",
+    "python-dotenv>=1.1.1",
 ]

@@ -1,6 +1,8 @@
-from ortools.sat.python import cp_model
 from dataclasses import dataclass, field
 from typing import List
+
+from ortools.sat.python import cp_model
+
 
 # Define os dados
 @dataclass
@@ -9,12 +11,14 @@ class Projetista:
     nome: str
     carga_diaria: int  # em horas
 
+
 @dataclass
 class Nota:
     id: int
     descricao: str
     tempo_estimado: int  # em horas
     prioridade: int  # quanto menor o número, maior a prioridade
+
 
 # Exemplo de dados
 projetistas = [
@@ -45,7 +49,7 @@ for nota in notas:
 for nota in notas:
     model.Add(sum(nota_vars[(nota.id, proj.id)] for proj in projetistas) == 1)
 
-# Respeita a carga diária de cada projetista
+# Respeita a carga de cada projetista
 for proj in projetistas:
     model.Add(
         sum(nota_vars[(nota.id, proj.id)] * nota.tempo_estimado for nota in notas)
@@ -63,10 +67,10 @@ if status == cp_model.OPTIMAL or status == cp_model.FEASIBLE:
         total = 0
         for nota in notas:
             if solver.Value(nota_vars[(nota.id, proj.id)]):
-                print(f"  - Nota {nota.descricao} (Prioridade {nota.prioridade}, {nota.tempo_estimado}h)")
+                print(
+                    f"  - Nota {nota.descricao} (Prioridade {nota.prioridade}, {nota.tempo_estimado}h)"
+                )
                 total += nota.tempo_estimado
         print(f"  Total atribuído: {total}h")
 else:
     print("Não foi possível encontrar uma solução viável.")
-
-
