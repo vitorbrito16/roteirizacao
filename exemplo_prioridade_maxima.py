@@ -36,7 +36,7 @@ def obter_tarefas(caminho):
                 int(row["nota"]),
                 row["grupo"],
                 row["codigo"],
-                int(row["custo"]),
+                int(row["esforco"]),
                 int(row["prioridade"]),
                 habilidades,
             )
@@ -70,7 +70,7 @@ def aplicar_restricoes(modelo, tarefas, recursos):
     # Restrição: carga horária por projetista
     for recurso in recursos:
         carga_total = sum(
-            tarefa.custo * tarefa_recurso[(tarefa.nota, recurso.matricula)]
+            tarefa.esforco * tarefa_recurso[(tarefa.nota, recurso.matricula)]
             for tarefa in tarefas
             if (tarefa.nota, recurso.matricula) in tarefa_recurso
         )
@@ -78,56 +78,86 @@ def aplicar_restricoes(modelo, tarefas, recursos):
 
     return modelo, tarefa_recurso
 
-def aplicar_objetivo_balanceamento(modelo, tarefas, recursos, tarefa_recurso):
+def aplicar_objetivos(modelo, tarefas, recursos, tarefa_recurso):
     """
-    Cria um objetivo com duas metas:
-    1. Maximizar o custo total das tarefas atribuídas (maior prioridade).
-    2. Balancear a carga de trabalho entre os recursos (menor prioridade).
+    Cria um objetivo hierárquico:
+    1. Maximiza a prioridade das tarefas (mais importante).
+    2. Maximiza o esforco total das tarefas atribuídas (desempate).
+    3. Balanceia a carga de trabalho (ajuste fino).
     """
-    # --- Parte 1: Maximizar o trabalho feito ---
-    custo_total_atribuido = sum(
-        tarefa.custo * tarefa_recurso.get((tarefa.nota, recurso.matricula), 0)
+    # --- Cálculo dos Scores para cada objetivo ---
+
+    # 1. Score de Prioridade
+    # Como prioridade '1' é melhor que '2', precisamos inverter o valor para maximização.
+    # Uma tarefa de prioridade 1 valerá mais pontos que uma de prioridade 2.
+    if not tarefas:
+        max_prioridade = 1
+    else:
+        max_prioridade = max(t.prioridade for t in tarefas)
+    
+    score_total_prioridade = modelo.NewIntVar(0, len(tarefas) * max_prioridade, "score_prioridade")
+    modelo.Add(score_total_prioridade == sum(
+        (max_prioridade + 1 - tarefa.prioridade) * tarefa_recurso.get((tarefa.nota, recurso.matricula), 0)
         for tarefa in tarefas
         for recurso in recursos
-    )
-    
-    # --- Parte 2: Balancear a carga ---
-    # Esta parte é idêntica à sua função de balanceamento
+    ))
+
+    # 2. Score de esforco
+    esforco_total_atribuido = modelo.NewIntVar(0, sum(t.esforco for t in tarefas), "esforco_total")
+    modelo.Add(esforco_total_atribuido == sum(
+        tarefa.esforco * tarefa_recurso.get((tarefa.nota, recurso.matricula), 0)
+        for tarefa in tarefas
+        for recurso in recursos
+    ))
+
+    # 3. Score de Balanceamento (Minimização da Diferença)
     variaveis_carga = []
+    carga_maxima_geral = sum(t.esforco for t in tarefas)
     for recurso in recursos:
-        carga_recurso = modelo.NewIntVar(0, recurso.disponibilidade, f"carga_{recurso.matricula}")
+        carga_recurso = modelo.NewIntVar(0, carga_maxima_geral, f"carga_{recurso.matricula}")
         modelo.Add(
             carga_recurso == sum(
-                tarefa.custo * tarefa_recurso.get((tarefa.nota, recurso.matricula), 0)
+                tarefa.esforco * tarefa_recurso.get((tarefa.nota, recurso.matricula), 0)
                 for tarefa in tarefas
             )
         )
         variaveis_carga.append(carga_recurso)
         
-    carga_max = modelo.NewIntVar(0, sum(tarefa.custo for tarefa in tarefas), "carga_max")
-    carga_min = modelo.NewIntVar(0, sum(tarefa.custo for tarefa in tarefas), "carga_min")
+    carga_max = modelo.NewIntVar(0, carga_maxima_geral, "carga_max")
+    carga_min = modelo.NewIntVar(0, carga_maxima_geral, "carga_min")
     modelo.AddMaxEquality(carga_max, variaveis_carga)
-    modelo.AddMinEquality(carga_min, variaveis_carga)
+    modelo.AddMinEquality(carga_min, variaveis_carga)    
+    diferenca_carga = modelo.NewIntVar(0, carga_maxima_geral, "diferenca_carga")
+    modelo.Add(diferenca_carga == carga_max - carga_min)
+
+    # --- Definição dos Pesos para a Hierarquia ---
+    # O peso do nível superior deve ser maior que a soma máxima possível de todos os níveis inferiores.
     
-    diferenca_carga = carga_max - carga_min
+    # O esforco total é um bom delimitador para o nível de balanceamento.
+    PESO_BALANCEAMENTO = 1
     
-    # --- Combinando os Objetivos ---
-    # Damos um peso muito maior para o trabalho feito.
-    # Por exemplo, cada ponto de 'custo' vale 1000 pontos de "não-balanceamento".
-    # Isso garante que o solver NUNCA sacrificará uma tarefa em prol de um melhor balanceamento.
+    # O peso da prioridade deve ser maior que o esforco total máximo possível.
+    # PESO_ESFORCO = carga_maxima_geral + 1
+    PESO_ESFORCO = 3
     
-    # Usamos .get() com valor padrão 0 para o caso de o par (tarefa, recurso) não ser válido (falta de habilidade).
-    
-    PESO_MAXIMIZACAO = 1000 
-    
-    modelo.Maximize( (custo_total_atribuido * PESO_MAXIMIZACAO) - diferenca_carga )
+    # O peso da prioridade deve ser maior que o score de esforco máximo possível
+    # PESO_PRIORIDADE = (carga_maxima_geral + 1) * (len(tarefas) + 1)
+    PESO_PRIORIDADE = 6
+
+    # --- Combinação dos Objetivos ---
+    modelo.Maximize(
+        (score_total_prioridade * PESO_PRIORIDADE) +
+        (esforco_total_atribuido * PESO_ESFORCO) -
+        (diferenca_carga * PESO_BALANCEAMENTO)
+    )
 
     return modelo
 
 
-def solucionar_modelo(modelo):
-    # Solução
+
+def solucionar_modelo(modelo, tempo_limite=30.0):
     solver = cp_model.CpSolver()
+    solver.parameters.max_time_in_seconds = tempo_limite
     status = solver.Solve(modelo)
     return status, solver
 
@@ -152,12 +182,12 @@ def exportar_resultado(status, solver, tarefas, recursos, tarefa_recurso):
                             "nota": tarefa.nota,
                             "matricula": recurso.matricula,
                             "nome": recurso.nome,
-                            "custo": tarefa.custo,
+                            "esforco": tarefa.esforco,
                             "prioridade": tarefa.prioridade,
                         }
                     )
         df = pd.DataFrame(dados)
-        df.to_csv("distribuicao_tarefas.csv", index=False, encoding="utf-8")
+        df.to_csv("./output/distribuicao_tarefas_prioridade_maxima.csv", index=False, encoding="utf-8")
 
         print("Distribuição exportada para 'distribuicao_tarefas.csv'.")
     else:
@@ -167,6 +197,7 @@ def exportar_resultado(status, solver, tarefas, recursos, tarefa_recurso):
 def main():
     CAMINHO_RECURSOS = os.getenv("CAMINHO_RECURSOS")
     CAMINHO_TAREFAS = os.getenv("CAMINHO_TAREFAS")
+    TEMPO_LIMITE = float(os.getenv("TEMPO_LIMITE", 30.0))
 
     tarefas, df_tarefas = obter_tarefas(CAMINHO_TAREFAS)
     recursos, df_recursos = obter_recursos(CAMINHO_RECURSOS)
@@ -179,10 +210,10 @@ def main():
     modelo_restrito, tarefa_recurso = aplicar_restricoes(
         modelo, tarefas_priorizadas, recursos
     )
-    modelo_final = aplicar_objetivo_balanceamento(
+    modelo_final = aplicar_objetivos(
         modelo_restrito, tarefas_priorizadas, recursos, tarefa_recurso
     )
-    status, solver = solucionar_modelo(modelo_final)
+    status, solver = solucionar_modelo(modelo_final, TEMPO_LIMITE)
 
     exportar_resultado(status, solver, tarefas_priorizadas, recursos, tarefa_recurso)
 

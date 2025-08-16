@@ -16,6 +16,6 @@ class Tarefa:
     nota: int
     grupo: str
     codigo: str
-    custo: float
+    esforco: float
     prioridade: int
     habilidades: List[str]
