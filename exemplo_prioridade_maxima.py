@@ -11,6 +11,15 @@ load_dotenv()
 
 
 def obter_recursos(caminho):
+    """
+    Lê os dados dos recursos de um arquivo CSV.
+
+    Args:
+        caminho (str): O caminho para o arquivo CSV de recursos.
+
+    Returns:
+        tuple: Uma tupla contendo uma lista de objetos Recurso e o DataFrame original.
+    """
     recursos: List[Recurso] = []
     df = pd.read_csv(caminho, encoding="utf-8", sep=";")
     for _, row in df.iterrows():
@@ -27,6 +36,15 @@ def obter_recursos(caminho):
     return recursos, df
 
 def obter_tarefas(caminho):
+    """
+    Lê os dados das tarefas de um arquivo CSV.
+
+    Args:
+        caminho (str): O caminho para o arquivo CSV de tarefas.
+
+    Returns:
+        tuple: Uma tupla contendo uma lista de objetos Tarefa e o DataFrame original.
+    """
     tarefas: List[Tarefa] = []
     df = pd.read_csv(caminho, encoding="utf-8", sep=";")
     for _, row in df.iterrows():
@@ -44,11 +62,32 @@ def obter_tarefas(caminho):
     return tarefas, df
 
 def aplicar_prioridade(tarefas: List[Tarefa]):
+    """
+    Ordena a lista de tarefas com base na prioridade.
+    A ordenação é feita in-place.
+
+    Args:
+        tarefas (List[Tarefa]): A lista de tarefas a ser ordenada.
+
+    Returns:
+        List[Tarefa]: A lista de tarefas ordenada por prioridade.
+    """
     # Ordenar notas por prioridade (menor número = maior prioridade)
     tarefas.sort(key=lambda n: n.prioridade)
     return tarefas
 
 def aplicar_restricoes(modelo, tarefas, recursos):
+    """
+    Aplica as restrições do problema ao modelo CP-SAT.
+
+    Args:
+        modelo (cp_model.CpModel): O objeto do modelo.
+        tarefas (List[Tarefa]): A lista de tarefas.
+        recursos (List[Recurso]): A lista de recursos.
+
+    Returns:
+        tuple: Uma tupla contendo o modelo com as restrições e o dicionário de variáveis de decisão.
+    """
     # Variáveis de decisão: nota atribuída ao projetista
     tarefa_recurso = {}
     for tarefa in tarefas:
@@ -80,10 +119,19 @@ def aplicar_restricoes(modelo, tarefas, recursos):
 
 def aplicar_objetivos(modelo, tarefas, recursos, tarefa_recurso):
     """
-    Cria um objetivo hierárquico:
+    Define a função objetivo para o modelo de otimização.
+    O objetivo é maximizar uma combinação ponderada da prioridade e do esforço das tarefas.
     1. Maximiza a prioridade das tarefas (mais importante).
-    2. Maximiza o esforco total das tarefas atribuídas (desempate).
-    3. Balanceia a carga de trabalho (ajuste fino).
+    2. Maximiza a utilizacao dos recursos.
+
+    Args:
+        modelo (cp_model.CpModel): O objeto do modelo.
+        tarefas (List[Tarefa]): A lista de tarefas.
+        recursos (List[Recurso]): A lista de recursos.
+        tarefa_recurso (dict): Dicionário com as variáveis de decisão.
+
+    Returns:
+        cp_model.CpModel: O modelo com a função objetivo definida.
     """
     # --- Cálculo dos Scores para cada objetivo ---
 
@@ -110,60 +158,43 @@ def aplicar_objetivos(modelo, tarefas, recursos, tarefa_recurso):
         for recurso in recursos
     ))
 
-    # 3. Score de Balanceamento (Minimização da Diferença)
-    variaveis_carga = []
-    carga_maxima_geral = sum(t.esforco for t in tarefas)
-    for recurso in recursos:
-        carga_recurso = modelo.NewIntVar(0, carga_maxima_geral, f"carga_{recurso.matricula}")
-        modelo.Add(
-            carga_recurso == sum(
-                tarefa.esforco * tarefa_recurso.get((tarefa.nota, recurso.matricula), 0)
-                for tarefa in tarefas
-            )
-        )
-        variaveis_carga.append(carga_recurso)
-        
-    carga_max = modelo.NewIntVar(0, carga_maxima_geral, "carga_max")
-    carga_min = modelo.NewIntVar(0, carga_maxima_geral, "carga_min")
-    modelo.AddMaxEquality(carga_max, variaveis_carga)
-    modelo.AddMinEquality(carga_min, variaveis_carga)    
-    diferenca_carga = modelo.NewIntVar(0, carga_maxima_geral, "diferenca_carga")
-    modelo.Add(diferenca_carga == carga_max - carga_min)
-
     # --- Definição dos Pesos para a Hierarquia ---
     # O peso do nível superior deve ser maior que a soma máxima possível de todos os níveis inferiores.
     
-    # O esforco total é um bom delimitador para o nível de balanceamento.
-    PESO_BALANCEAMENTO = 1
-    
-    # O peso da prioridade deve ser maior que o esforco total máximo possível.
-    # PESO_ESFORCO = carga_maxima_geral + 1
-    PESO_ESFORCO = 3
-    
-    # O peso da prioridade deve ser maior que o score de esforco máximo possível
-    # PESO_PRIORIDADE = (carga_maxima_geral + 1) * (len(tarefas) + 1)
-    PESO_PRIORIDADE = 6
-
-    # --- Combinação dos Objetivos ---
     modelo.Maximize(
-        (score_total_prioridade * PESO_PRIORIDADE) +
-        (esforco_total_atribuido * PESO_ESFORCO) -
-        (diferenca_carga * PESO_BALANCEAMENTO)
+        (score_total_prioridade * PESOS_PERCENTUAIS['prioridade']) +
+        (esforco_total_atribuido * PESOS_PERCENTUAIS['esforco'])
     )
 
     return modelo
 
-
-
 def solucionar_modelo(modelo, tempo_limite=30.0):
+    """
+    Resolve o modelo CP-SAT usando o solver.
+
+    Args:
+        modelo (cp_model.CpModel): O modelo a ser resolvido.
+        tempo_limite (float, optional): O tempo máximo em segundos para o solver. Defaults to 30.0.
+
+    Returns:
+        tuple: Uma tupla contendo o status da solução e o objeto solver.
+    """
     solver = cp_model.CpSolver()
     solver.parameters.max_time_in_seconds = tempo_limite
     status = solver.Solve(modelo)
     return status, solver
 
-
 def exportar_resultado(status, solver, tarefas, recursos, tarefa_recurso):
+    """
+    Exporta o resultado da otimização para um arquivo CSV se uma solução for encontrada.
 
+    Args:
+        status: O status da solução retornado pelo solver.
+        solver: O objeto solver após a execução.
+        tarefas (List[Tarefa]): A lista de tarefas.
+        recursos (List[Recurso]): A lista de recursos.
+        tarefa_recurso (dict): Dicionário com as variáveis de decisão.
+    """
     if status == cp_model.OPTIMAL or status == cp_model.FEASIBLE:
         print(f"Status da solução: {solver.StatusName(status)} ({status})")
         print(f"Valor do objetivo alcançado: {solver.ObjectiveValue()}")
@@ -187,18 +218,13 @@ def exportar_resultado(status, solver, tarefas, recursos, tarefa_recurso):
                         }
                     )
         df = pd.DataFrame(dados)
-        df.to_csv("./output/distribuicao_tarefas_prioridade_maxima.csv", index=False, encoding="utf-8")
+        df.to_csv("./data/distribuicao_tarefas_prioridade_maxima.csv", index=False, encoding="utf-8", sep=";")
 
         print("Distribuição exportada para 'distribuicao_tarefas.csv'.")
     else:
         print(f"Não foi possível encontrar uma solução viável: {status}")
 
-
 def main():
-    CAMINHO_RECURSOS = os.getenv("CAMINHO_RECURSOS")
-    CAMINHO_TAREFAS = os.getenv("CAMINHO_TAREFAS")
-    TEMPO_LIMITE = float(os.getenv("TEMPO_LIMITE", 30.0))
-
     tarefas, df_tarefas = obter_tarefas(CAMINHO_TAREFAS)
     recursos, df_recursos = obter_recursos(CAMINHO_RECURSOS)
     # print(df_tarefas.head())
@@ -219,4 +245,13 @@ def main():
 
 
 if __name__ == "__main__":
+    CAMINHO_RECURSOS = os.getenv("CAMINHO_RECURSOS")
+    CAMINHO_TAREFAS = os.getenv("CAMINHO_TAREFAS")
+    TEMPO_LIMITE = float(os.getenv("TEMPO_LIMITE", 30.0))
+    PESOS_PERCENTUAIS = {
+        "prioridade": int(os.getenv("PESO_PRIORIDADE", 60)),
+        "esforco": int(os.getenv("PESO_ESFORCO", 40)),
+    }
+    print(f"Pesos Percentuais: {PESOS_PERCENTUAIS}")
+    ESCALA_NORMALIZACAO = int(os.getenv("ESCALA_NORMALIZACAO", 1000))
     main()

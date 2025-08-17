@@ -157,7 +157,7 @@ def exportar_resultado(status, solver, tarefas, recursos, tarefa_recurso):
                         }
                     )
         df = pd.DataFrame(dados)
-        df.to_csv("./output/distribuicao_tarefas_esforco_maximo.csv", index=False, encoding="utf-8")
+        df.to_csv("./data/distribuicao_tarefas_esforco_maximo.csv", index=False, encoding="utf-8", sep=";")
 
         print("Distribuição exportada para 'distribuicao_tarefas.csv'.")
     else:
