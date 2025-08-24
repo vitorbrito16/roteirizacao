@@ -1,3 +1,19 @@
+## Abordagem via greedy algorithm + heurística de refinamento:
+* Aplicar algoritmo guloso para gerar uma solução razoável, porém não otimizada quanto ao balanceamento da carga
+* Aplicar método heurístico ou metaheurístico para refinar a solução a partir do warm start gerado pelo algoritmo guloso, aproximando o resultado do ótimo quanto ao balanceamento de carga
+
+### Premissas fortes:
+* Tarefas são independentes (não há precedência)
+* Tarefas não podem ser interrompidas por outras
+* Tarefas podem começar em um dia e terminar em outro
+* Dentre as tarefas alocadas para cada recurso, uma tarefa menos prioritária não pode iniciar antes de outra de maior prioridade
+
+### Premissas fracas
+* Tarefas são executadas uma por vez por recurso (não há simultaneidade)
+
+### Ideias de premissas
+* Truncamento do tempo da tarefa: para tarefas cujo tempo de execução é superior ao tempo disponível, será considerado que ela tomará o todo o tempo restante disponível, e mais nada
+
 
 Título da Apresentação: O Futuro da Nossa Eficiência: Distribuição Inteligente de Demandas
 Subtítulo: Como a tecnologia pode otimizar nossa produtividade, garantir justiça e impulsionar resultados.
